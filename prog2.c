@@ -45,6 +45,20 @@ int current_bit = 0;
 struct pkt current_packet;
 int is_sending = 0;
 
+//Helper function to aid in checksums
+int checksum(struct pkt packet)
+{
+  int i;
+  unsigned int sum = 0;
+  sum += (unsigned int)packet.seqnum;
+  sum += (unsigned int)packet.acknum;
+  for(i = 0; i < 20; i++)
+    {
+      sum += (unsigned int)packet.payload[i];      
+    }
+  return (int)sum;
+}
+
 /* called from layer 5, passed the data to be sent to other side */
 A_output(message)
 struct msg message;
@@ -58,10 +72,11 @@ struct msg message;
 
   packet_out.seqnum = current_bit;
   packet_out.acknum = 0;
-  packet_out.checksum = 0;
   
   for(i = 0; i < 20; i++)
     packet_out.payload[i] = message.data[i];
+
+  packet_out.checksum = checksum(packet_out);
 
   printf("Sending packet to B\n");
   stats_packets_sent++;
@@ -118,12 +133,24 @@ A_init()
 B_input(packet)
 struct pkt packet;
 {
+  int i;
   struct pkt ack_packet;
+
+  if(checksum(packet) != packet.checksum)
+    {
+      printf("Packet Corrupted\n");
+      return;
+    }
 
   ack_packet.seqnum = packet.seqnum;
   ack_packet.acknum = packet.seqnum;
-  ack_packet.checksum = 0;
+  for(i = 0; i < 20; i++)
+    {
+      ack_packet.payload[i] = 0;
+    }
 
+  ack_packet.checksum = checksum(ack_packet);
+    
   printf("Received packet at B\n");
   stats_packets_received++;
 
