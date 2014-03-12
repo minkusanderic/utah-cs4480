@@ -35,9 +35,15 @@ struct pkt {
 
 /********* STUDENTS WRITE THE NEXT SEVEN ROUTINES *********/
 
+#define TIMEOUT 500.0f
+
 int stats_packets_sent = 0;
 int stats_packets_received = 0;
 
+
+int current_bit = 0;
+struct pkt current_packet;
+int is_sending = 0;
 
 /* called from layer 5, passed the data to be sent to other side */
 A_output(message)
@@ -46,7 +52,11 @@ struct msg message;
   struct pkt packet_out;
   int i;
 
-  packet_out.seqnum = 0;
+  //Exit early if we are already sending a packet and ignore the packet
+  if(is_sending == 1)
+    return;
+
+  packet_out.seqnum = current_bit;
   packet_out.acknum = 0;
   packet_out.checksum = 0;
   
@@ -55,6 +65,9 @@ struct msg message;
 
   printf("Sending packet to B\n");
   stats_packets_sent++;
+  is_sending = 1;
+  current_packet = packet_out;
+  starttimer(0, TIMEOUT);
   tolayer3(0, packet_out); //send out the built packet from A
 }
 
@@ -68,12 +81,27 @@ struct msg message;
 A_input(packet)
 struct pkt packet;
 {
-
+  stoptimer(0);
+  if(packet.acknum == current_bit)
+    {
+      printf("ACK received\n");
+      current_bit = !current_bit;
+      is_sending = 0;
+    }
+  else
+    {
+      printf("Inappropiate ACK received, resending\n");
+      starttimer(0, TIMEOUT);
+      tolayer3(0, current_packet);
+    }
 }
 
 /* called when A's timer goes off */
 A_timerinterrupt()
 {
+  printf("TIMEOUT!, resending\n");
+  starttimer(0, TIMEOUT);
+  tolayer3(0, current_packet);
 
 }  
 
@@ -90,9 +118,20 @@ A_init()
 B_input(packet)
 struct pkt packet;
 {
+  struct pkt ack_packet;
+
+  ack_packet.seqnum = packet.seqnum;
+  ack_packet.acknum = packet.seqnum;
+  ack_packet.checksum = 0;
+
   printf("Received packet at B\n");
   stats_packets_received++;
+
+  //Hand off data to Host B
   tolayer5(1, packet.payload);
+
+  //Send acknowledge packet to A
+  tolayer3(1, ack_packet);
 }
 
 /* called when B's timer goes off */
