@@ -59,6 +59,23 @@ int checksum(struct pkt packet)
   return (int)sum;
 }
 
+struct pkt send_packet(int target, int seq, int ack, char* payload)
+{
+  struct pkt packet_out;
+  int i;
+
+  packet_out.seqnum = seq;
+  packet_out.acknum = ack;
+  
+  for(i = 0; i < 20; i++)
+    packet_out.payload[i] = payload[i];
+
+  packet_out.checksum = checksum(packet_out);
+  printf("Sending packet (%d, %d, %d ,'%s')\n", packet_out.seqnum, packet_out.acknum, packet_out.checksum, packet_out.payload);
+  tolayer3(target, packet_out); //send out the built packet from A
+  return packet_out;
+}
+
 /* called from layer 5, passed the data to be sent to other side */
 A_output(message)
 struct msg message;
@@ -70,20 +87,10 @@ struct msg message;
   if(is_sending == 1)
     return;
 
-  packet_out.seqnum = current_bit;
-  packet_out.acknum = 0;
-  
-  for(i = 0; i < 20; i++)
-    packet_out.payload[i] = message.data[i];
-
-  packet_out.checksum = checksum(packet_out);
-
   printf("Sending packet to B\n");
-  stats_packets_sent++;
   is_sending = 1;
-  current_packet = packet_out;
   starttimer(0, TIMEOUT);
-  tolayer3(0, packet_out); //send out the built packet from A
+  current_packet = send_packet(0, current_bit, 0, message.data);
 }
 
 B_output(message)  /* need be completed only for extra credit */
@@ -97,6 +104,13 @@ A_input(packet)
 struct pkt packet;
 {
   stoptimer(0);
+  if(packet.checksum != checksum(packet))
+    {
+      printf("Received corrupted acknowledgment, resending...\n");
+      starttimer(0, TIMEOUT);
+      tolayer3(0, current_packet);
+      return;
+    }
   if(packet.acknum == current_bit)
     {
       printf("ACK received\n");
@@ -105,7 +119,7 @@ struct pkt packet;
     }
   else
     {
-      printf("Inappropiate ACK received, resending\n");
+      printf("NCK received, resending\n");
       starttimer(0, TIMEOUT);
       tolayer3(0, current_packet);
     }
@@ -135,30 +149,57 @@ struct pkt packet;
 {
   int i;
   struct pkt ack_packet;
+  struct pkt nck_packet;
 
   if(checksum(packet) != packet.checksum)
     {
-      printf("Packet Corrupted\n");
+      printf("Packet Corrupted! Sending NCK\n");
+
+      send_packet(1, packet.seqnum, !packet.seqnum, packet.payload);
+      
       return;
     }
 
-  ack_packet.seqnum = packet.seqnum;
-  ack_packet.acknum = packet.seqnum;
-  for(i = 0; i < 20; i++)
-    {
-      ack_packet.payload[i] = 0;
-    }
+  
+  send_packet(1, packet.seqnum, packet.seqnum, packet.payload);
+  
+  /* if(packet.seqnum != expected_bit) */
+  /*   { */
+  /*     printf("Received a packet out of order at B, sending NCK\n"); */
+      
+  /*     nck_packet.seqnum = !packet.seqnum; */
+  /*     nck_packet.acknum = !packet.seqnum; */
+  /*     for(i = 0; i < 20; i++) */
+  /* 	{ */
+  /* 	  nck_packet.payload[i] = 0; */
+  /* 	} */
+  /*     nck_packet.checksum = checksum(nck_packet); */
+      
+  /*     //Send acknowledge packet to A */
+  /*     tolayer3(1, nck_packet); */
+  /*     return; */
+  /*   } */
 
-  ack_packet.checksum = checksum(ack_packet);
-    
-  printf("Received packet at B\n");
-  stats_packets_received++;
+  /* if(packet.seqnum == expected_bit) */
+  /*   { */
+  /*     printf("Received the correct packet at B, sending ACK\n"); */
 
-  //Hand off data to Host B
-  tolayer5(1, packet.payload);
+  /*     ack_packet.seqnum = packet.seqnum; */
+  /*     ack_packet.acknum = packet.seqnum; */
+  /*     for(i = 0; i < 20; i++) */
+  /* 	{ */
+  /* 	  ack_packet.payload[i] = 0; */
+  /* 	} */
+  /*     ack_packet.checksum = checksum(ack_packet); */
+      
+  /*     //Hand off data to Host B */
+  /*     tolayer5(1, packet.payload); */
+      
+  /*     //Send acknowledge packet to A */
+  /*     tolayer3(1, ack_packet); */
 
-  //Send acknowledge packet to A
-  tolayer3(1, ack_packet);
+  /*     expected_bit = !expected_bit; */
+  /*   } */
 }
 
 /* called when B's timer goes off */
