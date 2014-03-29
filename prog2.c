@@ -36,14 +36,13 @@ struct pkt {
 /********* STUDENTS WRITE THE NEXT SEVEN ROUTINES *********/
 
 #define TIMEOUT 500.0f
+#define WINDOW 8
 
-int stats_packets_sent = 0;
-int stats_packets_received = 0;
+struct pkt buffer[50];
 
+unsigned int ack_sequence = 0;
+unsigned int sent_sequence = 0;
 
-int current_bit = 0;
-struct pkt current_packet;
-int is_sending = 0;
 
 struct stats {
   int packets_sent;
@@ -104,20 +103,14 @@ A_output(message)
 struct msg message;
 {
   struct pkt packet_out;
-  int i;
 
-  //Exit early if we are already sending a packet and ignore the packet
-  if(is_sending == 1)
-    {
-      printf("Ignoring packet requested to be sent by the user\n");
-      stats.packets_ignored++;
-      return;
-    }
+  printf("Sending packet to B\n");
 
-  printf("A: Sending message to B\n");
-  is_sending = 1;
   starttimer(0, TIMEOUT);
-  current_packet = send_packet(0, current_bit, 0, message.data);
+  sent_sequence++;
+  packet_out = send_packet(0, sent_sequence, 0, message.data);
+  //Save to buffer
+  buffer[sent_sequence % 50] = packet_out;
 }
 
 B_output(message)  /* need be completed only for extra credit */
@@ -134,29 +127,17 @@ struct pkt packet;
   stats.packets_received++;
   if(packet.checksum != checksum(packet))
     {
-      printf("A: Received corrupted acknowledgment, resending...\n");
-      starttimer(0, TIMEOUT);
-      stats.packets_sent++;
-      tolayer3(0, current_packet);
-      stats.packets_corrupted++;
-      stats.ack_corrupted++;
+      //ignore this ack
       return;
     }
-  if(packet.acknum == current_bit)
+  if(packet.acknum > ack_sequence)
     {
-      printf("A: ACK received\n");
-      current_bit = !current_bit;
-      is_sending = 0;
-      stats.ack_received++;
+      printf("ACK received\n");
+      ack_sequence = packet.acknum;
+      return;
     }
-  else
-    {
-      printf("A: NCK received, resending\n");
-      starttimer(0, TIMEOUT);
-      stats.packets_sent++;
-      stats.nck_received++;
-      tolayer3(0, current_packet);
-    }
+  return;
+
 }
 
 /* called when A's timer goes off */
@@ -164,10 +145,10 @@ A_timerinterrupt()
 {
   printf("A: TIMEOUT!, resending\n");
   starttimer(0, TIMEOUT);
-  stats.timeouts++;
-  stats.packets_sent++;
-  tolayer3(0, current_packet);
-
+  for(int i = ack_sequence; i <= sent_sequence; i++)
+    {
+      tolayer3(0, buffer[i % 50]);
+    }
 }  
 
 /* the following routine will be called once (only) before any other */
@@ -187,6 +168,7 @@ A_init()
 
 /* Note that with simplex transfer from a-to-B, there is no B_output() */
 
+unsigned int last_ack = 0;
 /* called from layer 3, when a packet arrives for layer 4 at B*/
 B_input(packet)
 struct pkt packet;
@@ -199,14 +181,28 @@ struct pkt packet;
 
   if(checksum(packet) != packet.checksum)
     {
-      printf("B: Packet Corrupted! Sending NCK\n");
-      stats.packets_corrupted++;
-      send_packet(1, packet.seqnum, !packet.seqnum, packet.payload);
+      printf("Packet Corrupted! Sending ACK\n");
+
+      send_packet(1, last_ack, last_ack, packet.payload);
       
       return;
     }
-  
-  send_packet(1, packet.seqnum, packet.seqnum, packet.payload);
+  if(packet.seqnum < last_ack)
+    {
+      //Ignore
+      return;
+    }
+  else if(packet.seqnum == last_ack)
+    {
+      last_ack++;
+      send_packet(1, last_ack, last_ack, packet.payload);
+      return;
+    }
+  else{
+    printf("Out of order packet received! Sending NCK");
+    send_packet(1, last_ack, last_ack, packet.payload);
+    return;
+  }
 }
 
 /* called when B's timer goes off */
