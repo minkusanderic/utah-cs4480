@@ -45,6 +45,16 @@ int current_bit = 0;
 struct pkt current_packet;
 int is_sending = 0;
 
+struct stats {
+  int packets_sent;
+  int ack_received;
+  int nck_received;
+  int packets_received;
+  int packets_corrupted;
+  int ack_corrupted;
+  int timeouts;
+  int packets_ignored;
+} stats;
 //Helper function to aid in checksums
 int checksum(struct pkt packet)
 {
@@ -59,6 +69,7 @@ int checksum(struct pkt packet)
   return (int)sum;
 }
 
+//Helper function to create and send packets
 struct pkt send_packet(int target, int seq, int ack, char* payload)
 {
   struct pkt packet_out;
@@ -71,9 +82,21 @@ struct pkt send_packet(int target, int seq, int ack, char* payload)
     packet_out.payload[i] = payload[i];
 
   packet_out.checksum = checksum(packet_out);
-  printf("Sending packet (%d, %d, %d ,'%s')\n", packet_out.seqnum, packet_out.acknum, packet_out.checksum, packet_out.payload);
+  printf("%c: Sending packet (%d, %d, %d ,'%s')\n",(target == 0) ? 'A' : 'B' ,packet_out.seqnum, packet_out.acknum, packet_out.checksum, packet_out.payload);
+  stats.packets_sent++;
   tolayer3(target, packet_out); //send out the built packet from A
   return packet_out;
+}
+
+//This function will be called at the end of the simulation to get a report of the stats gathered
+void print_stats()
+{
+  printf("--------STATS REPORT----------\n");
+  printf("TOTAL PACKETS SENT: %i\n", stats.packets_sent);
+  printf("TOTAL PACKETS IGNORNED: %i\n", stats.packets_ignored);
+  printf("TOTAL PACKET LOSS: %f%%\n", 100.0f - ((float)stats.packets_received * 100.0f/(float)stats.packets_sent));
+  printf("CORRUPTION %%: %f\n", (float)stats.packets_corrupted * 100.0f/(float)stats.packets_sent);
+  printf("---------END REPORT-----------\n");
 }
 
 /* called from layer 5, passed the data to be sent to other side */
@@ -85,9 +108,13 @@ struct msg message;
 
   //Exit early if we are already sending a packet and ignore the packet
   if(is_sending == 1)
-    return;
+    {
+      printf("Ignoring packet requested to be sent by the user\n");
+      stats.packets_ignored++;
+      return;
+    }
 
-  printf("Sending packet to B\n");
+  printf("A: Sending message to B\n");
   is_sending = 1;
   starttimer(0, TIMEOUT);
   current_packet = send_packet(0, current_bit, 0, message.data);
@@ -104,23 +131,30 @@ A_input(packet)
 struct pkt packet;
 {
   stoptimer(0);
+  stats.packets_received++;
   if(packet.checksum != checksum(packet))
     {
-      printf("Received corrupted acknowledgment, resending...\n");
+      printf("A: Received corrupted acknowledgment, resending...\n");
       starttimer(0, TIMEOUT);
+      stats.packets_sent++;
       tolayer3(0, current_packet);
+      stats.packets_corrupted++;
+      stats.ack_corrupted++;
       return;
     }
   if(packet.acknum == current_bit)
     {
-      printf("ACK received\n");
+      printf("A: ACK received\n");
       current_bit = !current_bit;
       is_sending = 0;
+      stats.ack_received++;
     }
   else
     {
-      printf("NCK received, resending\n");
+      printf("A: NCK received, resending\n");
       starttimer(0, TIMEOUT);
+      stats.packets_sent++;
+      stats.nck_received++;
       tolayer3(0, current_packet);
     }
 }
@@ -128,8 +162,10 @@ struct pkt packet;
 /* called when A's timer goes off */
 A_timerinterrupt()
 {
-  printf("TIMEOUT!, resending\n");
+  printf("A: TIMEOUT!, resending\n");
   starttimer(0, TIMEOUT);
+  stats.timeouts++;
+  stats.packets_sent++;
   tolayer3(0, current_packet);
 
 }  
@@ -138,6 +174,14 @@ A_timerinterrupt()
 /* entity A routines are called. You can use it to do any initialization */
 A_init()
 {
+  stats.packets_sent = 0;
+  stats.ack_received = 0;
+  stats.nck_received = 0;
+  stats.packets_received = 0;
+  stats.packets_corrupted = 0;
+  stats.ack_corrupted = 0;
+  stats.timeouts = 0;
+  stats.packets_ignored = 0;
 }
 
 
@@ -151,55 +195,18 @@ struct pkt packet;
   struct pkt ack_packet;
   struct pkt nck_packet;
 
+  stats.packets_received++;
+
   if(checksum(packet) != packet.checksum)
     {
-      printf("Packet Corrupted! Sending NCK\n");
-
+      printf("B: Packet Corrupted! Sending NCK\n");
+      stats.packets_corrupted++;
       send_packet(1, packet.seqnum, !packet.seqnum, packet.payload);
       
       return;
     }
-
   
   send_packet(1, packet.seqnum, packet.seqnum, packet.payload);
-  
-  /* if(packet.seqnum != expected_bit) */
-  /*   { */
-  /*     printf("Received a packet out of order at B, sending NCK\n"); */
-      
-  /*     nck_packet.seqnum = !packet.seqnum; */
-  /*     nck_packet.acknum = !packet.seqnum; */
-  /*     for(i = 0; i < 20; i++) */
-  /* 	{ */
-  /* 	  nck_packet.payload[i] = 0; */
-  /* 	} */
-  /*     nck_packet.checksum = checksum(nck_packet); */
-      
-  /*     //Send acknowledge packet to A */
-  /*     tolayer3(1, nck_packet); */
-  /*     return; */
-  /*   } */
-
-  /* if(packet.seqnum == expected_bit) */
-  /*   { */
-  /*     printf("Received the correct packet at B, sending ACK\n"); */
-
-  /*     ack_packet.seqnum = packet.seqnum; */
-  /*     ack_packet.acknum = packet.seqnum; */
-  /*     for(i = 0; i < 20; i++) */
-  /* 	{ */
-  /* 	  ack_packet.payload[i] = 0; */
-  /* 	} */
-  /*     ack_packet.checksum = checksum(ack_packet); */
-      
-  /*     //Hand off data to Host B */
-  /*     tolayer5(1, packet.payload); */
-      
-  /*     //Send acknowledge packet to A */
-  /*     tolayer3(1, ack_packet); */
-
-  /*     expected_bit = !expected_bit; */
-  /*   } */
 }
 
 /* called when B's timer goes off */
@@ -341,6 +348,8 @@ main()
 
  terminate:
   printf(" Simulator terminated at time %f\n after sending %d msgs from layer5\n",time,nsim);
+
+  print_stats();
 }
 
 
