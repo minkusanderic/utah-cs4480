@@ -42,6 +42,7 @@ struct pkt buffer[50];
 
 unsigned int ack_sequence = 0;
 unsigned int sent_sequence = 0;
+unsigned int buffer_sequence = 0;
 
 
 struct stats {
@@ -69,7 +70,7 @@ int checksum(struct pkt packet)
 }
 
 //Helper function to create and send packets
-struct pkt send_packet(int target, int seq, int ack, char* payload)
+struct pkt make_packet(int seq, int ack, char* payload)
 {
   struct pkt packet_out;
   int i;
@@ -81,11 +82,19 @@ struct pkt send_packet(int target, int seq, int ack, char* payload)
     packet_out.payload[i] = payload[i];
 
   packet_out.checksum = checksum(packet_out);
+  return packet_out;
+}
+
+struct pkt send_packet(int target, int seq, int ack, char* payload)
+{
+  struct pkt packet_out;
+  packet_out = make_packet(seq, ack, payload);
   printf("%c: Sending packet (%d, %d, %d ,'%s')\n",(target == 0) ? 'A' : 'B' ,packet_out.seqnum, packet_out.acknum, packet_out.checksum, packet_out.payload);
   stats.packets_sent++;
   tolayer3(target, packet_out); //send out the built packet from A
   return packet_out;
 }
+
 
 //This function will be called at the end of the simulation to get a report of the stats gathered
 void print_stats()
@@ -104,13 +113,32 @@ struct msg message;
 {
   struct pkt packet_out;
 
-  printf("Sending packet to B\n");
+  if((buffer_sequence - ack_sequence) > 50)
+    {
+      printf("Buffer is full, ignoring packet");
+      stats.packets_ignored++;
+      return;
+    }
 
-  starttimer(0, TIMEOUT);
-  sent_sequence++;
-  packet_out = send_packet(0, sent_sequence, 0, message.data);
+
+  packet_out = make_packet(buffer_sequence, 0, message.data);
+  if((sent_sequence - ack_sequence) < WINDOW)
+    {
+      if(sent_sequence == ack_sequence) 
+	{
+	  starttimer(0, TIMEOUT);
+	}
+      printf("Sending packet to B\n");
+
+      tolayer3(0, packet_out);
+      stats.packets_sent++;
+      sent_sequence++;
+    }
+
   //Save to buffer
   buffer[sent_sequence % 50] = packet_out;
+  buffer_sequence++;
+
 }
 
 B_output(message)  /* need be completed only for extra credit */
@@ -123,17 +151,32 @@ struct msg message;
 A_input(packet)
 struct pkt packet;
 {
-  stoptimer(0);
+  int i;
   stats.packets_received++;
   if(packet.checksum != checksum(packet))
     {
       //ignore this ack
+      stats.packets_corrupted++;
       return;
     }
   if(packet.acknum > ack_sequence)
     {
+      
+      for(i = sent_sequence + 1; i <= (sent_sequence + (ack_sequence - packet.acknum)), i <= buffer_sequence; i++)
+	{
+	  tolayer3(0, buffer[i % 50]);
+	  stats.packets_sent;
+	  sent_sequence++;
+	}
       printf("ACK received\n");
       ack_sequence = packet.acknum;
+      stoptimer(0);
+
+      if(sent_sequence > ack_sequence)
+	{
+	  //if we have packets out, then reset the timer
+	  starttimer(0, TIMEOUT);
+	}
       return;
     }
   return;
@@ -143,10 +186,12 @@ struct pkt packet;
 /* called when A's timer goes off */
 A_timerinterrupt()
 {
+  int i;
   printf("A: TIMEOUT!, resending\n");
   starttimer(0, TIMEOUT);
-  for(int i = ack_sequence; i <= sent_sequence; i++)
+  for(i = ack_sequence; i <= sent_sequence; i++)
     {
+      stats.packets_sent++;
       tolayer3(0, buffer[i % 50]);
     }
 }  
@@ -182,8 +227,9 @@ struct pkt packet;
   if(checksum(packet) != packet.checksum)
     {
       printf("Packet Corrupted! Sending ACK\n");
-
+      
       send_packet(1, last_ack, last_ack, packet.payload);
+      stats.packets_corrupted++;
       
       return;
     }
