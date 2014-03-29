@@ -36,14 +36,13 @@ struct pkt {
 /********* STUDENTS WRITE THE NEXT SEVEN ROUTINES *********/
 
 #define TIMEOUT 500.0f
+#define WINDOW 8
 
-int stats_packets_sent = 0;
-int stats_packets_received = 0;
+struct pkt buffer[50];
 
+unsigned int ack_sequence = 0;
+unsigned int sent_sequence = 0;
 
-int current_bit = 0;
-struct pkt current_packet;
-int is_sending = 0;
 
 //Helper function to aid in checksums
 int checksum(struct pkt packet)
@@ -81,16 +80,13 @@ A_output(message)
 struct msg message;
 {
   struct pkt packet_out;
-  int i;
-
-  //Exit early if we are already sending a packet and ignore the packet
-  if(is_sending == 1)
-    return;
 
   printf("Sending packet to B\n");
-  is_sending = 1;
   starttimer(0, TIMEOUT);
-  current_packet = send_packet(0, current_bit, 0, message.data);
+  sent_sequence++;
+  packet_out = send_packet(0, sent_sequence, 0, message.data);
+  //Save to buffer
+  buffer[sent_sequence % 50] = packet_out;
 }
 
 B_output(message)  /* need be completed only for extra credit */
@@ -106,23 +102,17 @@ struct pkt packet;
   stoptimer(0);
   if(packet.checksum != checksum(packet))
     {
-      printf("Received corrupted acknowledgment, resending...\n");
-      starttimer(0, TIMEOUT);
-      tolayer3(0, current_packet);
+      //ignore this ack
       return;
     }
-  if(packet.acknum == current_bit)
+  if(packet.acknum > ack_sequence)
     {
       printf("ACK received\n");
-      current_bit = !current_bit;
-      is_sending = 0;
+      ack_sequence = packet.acknum;
+      return;
     }
-  else
-    {
-      printf("NCK received, resending\n");
-      starttimer(0, TIMEOUT);
-      tolayer3(0, current_packet);
-    }
+  return;
+
 }
 
 /* called when A's timer goes off */
@@ -130,7 +120,11 @@ A_timerinterrupt()
 {
   printf("TIMEOUT!, resending\n");
   starttimer(0, TIMEOUT);
-  tolayer3(0, current_packet);
+  for(int i = ack_sequence; i <= sent_sequence; i++)
+    {
+      tolayer3(0, buffer[i % 50]);
+    }
+
 
 }  
 
@@ -143,6 +137,7 @@ A_init()
 
 /* Note that with simplex transfer from a-to-B, there is no B_output() */
 
+unsigned int last_ack = 0;
 /* called from layer 3, when a packet arrives for layer 4 at B*/
 B_input(packet)
 struct pkt packet;
@@ -153,53 +148,28 @@ struct pkt packet;
 
   if(checksum(packet) != packet.checksum)
     {
-      printf("Packet Corrupted! Sending NCK\n");
+      printf("Packet Corrupted! Sending ACK\n");
 
-      send_packet(1, packet.seqnum, !packet.seqnum, packet.payload);
+      send_packet(1, last_ack, last_ack, packet.payload);
       
       return;
     }
-
-  
-  send_packet(1, packet.seqnum, packet.seqnum, packet.payload);
-  
-  /* if(packet.seqnum != expected_bit) */
-  /*   { */
-  /*     printf("Received a packet out of order at B, sending NCK\n"); */
-      
-  /*     nck_packet.seqnum = !packet.seqnum; */
-  /*     nck_packet.acknum = !packet.seqnum; */
-  /*     for(i = 0; i < 20; i++) */
-  /* 	{ */
-  /* 	  nck_packet.payload[i] = 0; */
-  /* 	} */
-  /*     nck_packet.checksum = checksum(nck_packet); */
-      
-  /*     //Send acknowledge packet to A */
-  /*     tolayer3(1, nck_packet); */
-  /*     return; */
-  /*   } */
-
-  /* if(packet.seqnum == expected_bit) */
-  /*   { */
-  /*     printf("Received the correct packet at B, sending ACK\n"); */
-
-  /*     ack_packet.seqnum = packet.seqnum; */
-  /*     ack_packet.acknum = packet.seqnum; */
-  /*     for(i = 0; i < 20; i++) */
-  /* 	{ */
-  /* 	  ack_packet.payload[i] = 0; */
-  /* 	} */
-  /*     ack_packet.checksum = checksum(ack_packet); */
-      
-  /*     //Hand off data to Host B */
-  /*     tolayer5(1, packet.payload); */
-      
-  /*     //Send acknowledge packet to A */
-  /*     tolayer3(1, ack_packet); */
-
-  /*     expected_bit = !expected_bit; */
-  /*   } */
+  if(packet.seqnum < last_ack)
+    {
+      //Ignore
+      return;
+    }
+  else if(packet.seqnum == last_ack)
+    {
+      last_ack++;
+      send_packet(1, last_ack, last_ack, packet.payload);
+      return;
+    }
+  else{
+    printf("Out of order packet received! Sending NCK");
+    send_packet(1, last_ack, last_ack, packet.payload);
+    return;
+  }
 }
 
 /* called when B's timer goes off */
